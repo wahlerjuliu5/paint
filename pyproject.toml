@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paint-evenness"
+version = "0.1.0"
+description = "Stricter film metrics for spray-painting paths from the PaintNet / MaskPlanner cuboids"
+requires-python = ">=3.10"
+dependencies = ["numpy", "matplotlib", "torch"]
+
+[project.optional-dependencies]
+test = ["pytest", "scipy"]
+
+[tool.setuptools]
+packages = ["paintnet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
