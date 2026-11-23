@@ -1,0 +1,147 @@
+\documentclass[10pt]{article}
+\usepackage[a4paper,margin=1.8cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype,graphicx,booktabs,siunitx}
+\usepackage[hidelinks]{hyperref}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{titlesec}
+\titleformat*{\section}{\large\bfseries}
+\titlespacing*{\section}{0pt}{0.9em}{0.2em}
+\setlength{\textfloatsep}{0.8em}
+\setlength{\intextsep}{0.6em}
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+\graphicspath{{../outputs/}}
+
+\title{\vspace{-1.5em}99\% Paint Coverage Is Not an Even Coat:\\Re-measuring the PaintNet Cuboids}
+\author{Julius Wahler}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\paragraph{Summary.}
+PaintNet and MaskPlanner (Tiboni et al.) report paint coverage (PC) of up to 99\% on the
+PaintNet cuboids. We simulated the dataset's expert paths with an open spray-deposition
+model and measured what PC leaves out: how even the film is and how much paint it takes.
+Under our gun assumptions, the expert paths at the papers' \SI{120}{mm} standoff leave
+stripes on every part, with only 20\% of the surface within $\pm20\%$ of the mean
+thickness, and still score 100\% PC. A path with \SI{10}{mm} of sideways aim error reaches
+99\% PC once it sprays $1.3$--$2.6\times$ the paint (medians over 10 parts). In the other direction, refining the
+paths raises the share of surface within tolerance from 20\% to 76\% while PC does not move.
+PC is a necessary check, not a measure of coating quality.
+
+\section*{What the papers measure}
+PC counts a surface point as covered once its film exceeds a bar, the 10th percentile of
+the expert path's film, and averages over the points the expert path covers. Two
+consequences follow. The expert path scores 100\% by construction, however uneven its own
+film. And paint above the bar is free: doubling the flow can only raise PC, never lower it.
+The bar is also relative. A striped expert film sets a low bar and a lenient test.
+
+\section*{What we built}
+A small open-source simulator for the 1{,}000 cuboids of the extended PaintNet dataset
+(Zenodo 14967945). The spray is a Gaussian cone (\ang{25} half-angle by default) with
+inverse-square and incidence-angle falloff and back-face culling. Orientations follow the
+authors' loader ($+X$ rotated by \texttt{yzx} Euler angles $B,C,A$), which we verified
+against SciPy. On top of the papers' PC we report the thickness coefficient of variation
+(CV), the share of surface within $\pm20\%$ of the mean, and a stripe CV along $Z$ on the
+side faces, the step-over direction of the raster. A differentiable version of the model
+lets us refine paths by gradient descent on per-pose speed, standoff and sideways shift.
+
+\section*{Findings}
+
+\textbf{1. Striped expert paths.} With passes about
+\SI{105}{mm} apart, a \ang{25} cone paints a spot of radius \SI{56}{mm} at \SI{120}{mm} and
+\SI{93}{mm} at \SI{200}{mm}. Only the wider spot overlaps its neighbours. Over all 1{,}000
+cuboids (Table~\ref{tab:stats}), the \SI{120}{mm} films have about 4.5 times the thickness CV of the
+\SI{200}{mm} ones, and both score 100\% PC.
+
+\begin{table}[h]
+\centering\small
+\caption{Expert paths of all 1{,}000 cuboids, \ang{25} cone, medians.}
+\label{tab:stats}
+\begin{tabular}{lcc}
+\toprule
+ & \SI{120}{mm} standoff & \SI{200}{mm} standoff \\
+\midrule
+Thickness CV & 0.50 & 0.11 \\
+Stripe CV along $Z$, side faces & 0.42 & 0.06 \\
+Surface within $\pm20\%$ of mean & 20\% & 96\% \\
+Papers' PC bar, $\times$ mean thickness & 0.34 & 0.88 \\
+Papers' PC & 100\% & 100\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{2. Gun assumptions.} The papers state the
+\SI{120}{mm} distance but no cone angle. Across 28 gun settings (cone \ang{15}--\ang{45},
+standoff \SIrange{120}{250}{mm}, 8 parts) the surface within tolerance ranges from 8\% to
+97\% and the PC bar from 0.11 to 0.90 of the mean thickness. PC of the expert path is
+100\% in every cell.
+
+\textbf{3. Aim error.} We added smooth
+sideways aim error (across the stroke, correlated over about \SI{200}{mm}) to the expert
+paths of 10 parts spread over the dataset, then raised the paint flow until each passed
+99\% PC (Figure~\ref{fig:error}). At \SI{10}{mm} RMS the median path needs $1.3\times$ the
+paint at \SI{200}{mm} and $2.6\times$ at \SI{120}{mm}. At \SI{20}{mm} it needs $2.0\times$
+and $8.1\times$, and one part needs $40\times$. At \SI{200}{mm} the surface within
+tolerance falls from 96\% to 82\% at \SI{10}{mm} error and to 60\% at \SI{20}{mm}, while
+PC reads 99\% throughout. The spread between parts is small at \SI{200}{mm} and large at
+\SI{120}{mm}, where the narrow footprint leaves thin spots that only extra paint lifts.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\linewidth]{challenge.png}
+\caption{Expert paths of 10 parts with growing sideways aim error, each with the flow
+raised until it passes 99\% PC; median with the range over parts shaded. Left: paint
+needed relative to the expert path (log scale). Middle and right: evenness of the
+passing film.}
+\label{fig:error}
+\end{figure}
+
+\textbf{4. Refinement.} Refining 10 parts spread over the
+dataset raises the surface within tolerance from 20\% to 76\% at \SI{120}{mm} (using
+$0.92\times$ the paint) and from 96\% to 99\% at \SI{200}{mm} ($1.02\times$), with stripe
+CV falling by a factor of 2.5 to 3.6 (Figure~\ref{fig:refine}). PC stays at 100\% and
+99.8\%. At \SI{120}{mm} most of the gain comes from distance: the refiner backs the gun
+off to about \SI{152}{mm} on average.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\linewidth]{refinement.png}
+\caption{Expert against refined paths for 10 cuboids at \SI{120}{mm} (red) and
+\SI{200}{mm} (blue). The dashed line marks no change.}
+\label{fig:refine}
+\end{figure}
+
+\section*{What this means}
+PC answers whether paint reached the surface, relative to an expert who is right by
+definition. It cannot rank two paths that both pass, and it rewards spraying more. For
+a painting system the costs sit elsewhere: paint consumed, film outside specification,
+and rework. We suggest reporting PC together with three numbers the same simulator already
+gives: paint used relative to the expert path, the share of surface within a tolerance
+band, and stripe CV along the step-over direction. A bar in absolute film thickness,
+rather than a percentile of the expert film, would also make PC comparable across guns
+and parts.
+
+\section*{Limits}
+The gun model is assumed: the \ang{25} cone sets the stripe amplitude, and a cone of
+roughly \ang{35} or wider would close the stripes at \SI{120}{mm}. The paint-for-PC trade
+(finding 3) appears at both standoffs, though its size depends on the footprint. No
+PaintNet or MaskPlanner predictions were evaluated; the aim error is synthetic. About
+0.7\% of recorded poses put the gun inside the part, where it paints nothing; the error
+sweep leaves them in place. Occlusion is
+back-face culling, which is exact for cuboids only. The simulator has not been compared
+with measured films.
+
+\section*{Next steps}
+\begin{itemize}\itemsep0pt
+\item Evaluate the models' predicted paths: paint used, tolerance share, and their sideways
+      error in mm, which places them on Figure~\ref{fig:error}.
+\item Fix the gun model with the real fan width and flow at \SI{120}{mm}.
+\item Extend the simulator to the
+      windows, shelves and containers categories.
+\end{itemize}
+
+\end{document}

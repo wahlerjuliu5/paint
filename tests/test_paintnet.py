@@ -92,12 +92,12 @@ def test_stripe_cv_sees_stripes_along_z_only():
     assert stripe_cv(points, normals, along_x) < stripe_cv(points, normals, along_z) / 3
 
 
-def test_sloppy_path_wanders_across_the_spray_axis_with_the_same_paint(plate):
-    guns, dirs, dwell = sloppy_path(plate["strokes"], 200.0)
+def test_sloppy_path_shifts_the_aim_sideways_by_the_error(plate):
+    guns, dirs = sloppy_path(plate, 200.0, error=10.0)
     offset = guns - gun_poses(plate["strokes"], 200.0)[0]
     np.testing.assert_allclose((offset * dirs).sum(1), 0, atol=1e-9)
-    assert np.linalg.norm(offset, axis=1).max() > 10
-    assert dwell.mean() == pytest.approx(1)
+    assert (np.abs(offset[:, 0]) < 1e-9).mean() > 0.95  # passes run along X
+    assert np.sqrt((offset**2).sum(1).mean()) == pytest.approx(10)
 
 
 def test_flow_to_pass_is_the_smallest_flow_that_passes():

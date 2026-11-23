@@ -7,9 +7,10 @@ import numpy as np
 from src.data import OUTPUT_DIR, list_samples, load_sample
 from src.metrics import cv, in_tolerance, paint_coverage, pc_bar, side_profiles, stripe_cv
 from src.refine import refine
-from src.spray import film, gun_poses, perpendicular_basis, sample_surface, spray_directions, subsample
+from src.spray import film, gun_poses, sample_surface, spray_directions, subsample
 
 STANDOFFS = {120.0: "tab:red", 200.0: "tab:blue"}  # the papers' stated distance, and ours
+ERRORS = [0.0, 2.0, 5.0, 10.0, 20.0, 30.0]  # RMS sideways aim error, mm
 METRICS = {"cv": "Thickness CV", "stripe_cv": "Stripe CV along Z (side faces)",
            "in_tolerance": "Surface within ±20% of mean", "pc_bar": "Papers' PC bar / mean"}
 
@@ -36,20 +37,24 @@ def smooth_noise(rng, n, corr=40):
     return np.convolve(white, np.ones(corr) / corr, mode="valid") * np.sqrt(corr)
 
 
-def sloppy_path(strokes, standoff, jitter=30.0, dwell_spread=0.5, seed=0):
-    """The recorded path with the aim wandering across the spray axis and the speed
-    drifting, smoothly along each stroke. Mean dwell stays 1, so it sprays as much paint."""
+def sloppy_path(sample, standoff, error, corr=20, seed=0):
+    """The recorded path with the aim drifting sideways (across the stroke and the spray
+    axis) by smooth noise of RMS error mm, correlated over corr poses (about 200 mm).
+    Some recorded poses put the gun inside the part, where it paints nothing; they stay."""
     rng = np.random.default_rng(seed)
-    poses, ids = subsample(strokes)
+    poses, ids = subsample(sample["strokes"])
     dirs = spray_directions(poses[:, 3:6])
-    e1, e2 = perpendicular_basis(dirs)
-    noise = np.zeros((len(poses), 3))
+    noise, side = np.zeros(len(poses)), np.zeros_like(dirs)
     for k in np.unique(ids):
         m = ids == k
-        noise[m] = np.stack([smooth_noise(rng, m.sum()) for _ in range(3)], axis=1)
-    aim = poses[:, :3] + jitter * (noise[:, :1] * e1 + noise[:, 1:2] * e2)
-    dwell = np.exp(dwell_spread * noise[:, 2])
-    return aim - standoff * dirs, dirs, dwell / dwell.mean()
+        noise[m] = smooth_noise(rng, m.sum(), corr)
+        s = np.cross(dirs[m], np.gradient(poses[m, :3], axis=0))
+        side[m] = s / np.linalg.norm(s, axis=1, keepdims=True)
+    offset = error * noise / np.sqrt(np.mean(noise**2))
+    guns = poses[:, :3] - standoff * dirs
+    lo, hi = sample["vertices"].min(0), sample["vertices"].max(0)
+    offset[((guns > lo) & (guns < hi)).all(1)] = 0
+    return guns + offset[:, None] * side, dirs
 
 
 def flow_to_pass(thickness, reference, target=0.99):
@@ -167,22 +172,48 @@ def sweep(n_parts=8):
     _save(fig, rows, "sweep")
 
 
-def challenge(index=0):
-    """A sloppy path, with the paint flow raised until it passes the papers' PC."""
-    sample = load_sample(index)
-    points, normals = sample_surface(sample["vertices"], sample["faces"])
+def challenge(n_parts=10, shown=10.0):
+    """Recorded paths with growing aim error, each given the paint flow it needs to pass
+    the papers' 99% PC. The first part's films at the shown error are plotted per standoff."""
+    rows = []
+    for i in np.linspace(0, len(list_samples()) - 1, n_parts).astype(int):
+        sample = load_sample(i)
+        points, normals = sample_surface(sample["vertices"], sample["faces"])
+        for standoff in STANDOFFS:
+            truth = film(points, normals, *gun_poses(sample["strokes"], standoff))
+            for error in ERRORS:
+                sloppy = film(points, normals, *sloppy_path(sample, standoff, error))
+                flow = flow_to_pass(sloppy, truth)
+                rows.append({"name": sample["name"], "standoff": standoff, "error": error,
+                             "pc": paint_coverage(sloppy, truth), "flow": flow, "cv": cv(sloppy),
+                             "in_tolerance": in_tolerance(sloppy)})
+                if i == 0 and error == shown:
+                    fig = plot_films(f"{sample['name']}, {standoff:.0f} mm, {error:.0f} mm RMS aim error",
+                                     points, normals, {"recorded": truth, f"sloppy x{flow:.1f} paint": flow * sloppy})
+                    _save(fig, None, f"challenge_{standoff:.0f}mm")
+        print(f"  {sample['name']} done", flush=True)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
+    titles = {"flow": "Paint needed for 99% PC (× recorded)"} | METRICS
+    for ax, key in zip(axes, ["flow", "cv", "in_tolerance"]):
+        for standoff, color in STANDOFFS.items():
+            grid = np.array([[r[key] for r in rows if (r["standoff"], r["error"]) == (standoff, e)]
+                             for e in ERRORS])
+            ax.fill_between(ERRORS, grid.min(1), grid.max(1), color=color, alpha=0.2, lw=0)
+            ax.plot(ERRORS, np.median(grid, 1), "o-", color=color, label=f"{standoff:.0f} mm")
+        ax.set_xlabel("RMS sideways aim error (mm)")
+        ax.set_title(titles[key], fontsize=10)
+        ax.legend(fontsize=8)
+    axes[0].set_yscale("log")
     for standoff in STANDOFFS:
-        truth = film(points, normals, *gun_poses(sample["strokes"], standoff))
-        guns, dirs, dwell = sloppy_path(sample["strokes"], standoff)
-        sloppy = film(points, normals, guns, dirs, weights=dwell)
-        flow = flow_to_pass(sloppy, truth)
-        print(f"{sample['name']}, {standoff:.0f} mm: sloppy path scores "
-              f"{paint_coverage(sloppy, truth):.1%} PC at equal paint and needs {flow:.2f}x the "
-              f"paint for 99%, leaving {(flow * sloppy > 2 * truth.mean()).mean():.0%} of the "
-              f"surface over twice the recorded mean")
-        fig = plot_films(f"{sample['name']}, {standoff:.0f} mm, synthetic sloppy path",
-                         points, normals, {"recorded": truth, f"sloppy x{flow:.1f} paint": flow * sloppy})
-        _save(fig, None, f"challenge_{standoff:.0f}mm")
+        for error in ERRORS:
+            sub = [r for r in rows if (r["standoff"], r["error"]) == (standoff, error)]
+            median = lambda key: np.median([r[key] for r in sub])
+            print(f"{standoff:.0f} mm, {error:.0f} mm error: PC {median('pc'):.1%} at equal paint, "
+                  f"{median('flow'):.2f}x paint for 99%, within ±20% {median('in_tolerance'):.0%}")
+    fig.suptitle(f"Aim error against the paint it takes to pass the papers' PC, "
+                 f"{n_parts} parts (median, shaded min to max)")
+    fig.tight_layout()
+    _save(fig, rows, "challenge")
 
 
 def refinement(n_parts=10):
